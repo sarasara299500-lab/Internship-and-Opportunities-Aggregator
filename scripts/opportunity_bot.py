@@ -22,6 +22,7 @@ import time
 import re
 import urllib.request
 import urllib.parse
+import urllib.error
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -29,9 +30,12 @@ from datetime import datetime
 # CONFIG
 # ============================================================
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+
+# Groq model - update here if the model gets deprecated (see https://console.groq.com/docs/models)
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant").strip()
 
 SEEN_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "seen.json")
 
@@ -73,6 +77,24 @@ def save_seen(seen_set):
 def make_hash(text):
     """Create a unique hash for deduplication."""
     return hashlib.md5(text.encode()).hexdigest()
+
+
+# Keywords that indicate a listing is NOT an opportunity (exam results, keys, etc.)
+JUNK_KEYWORDS = [
+    "answer key", "result", "admit card", "hall ticket", "merit list",
+    "cut off", "cutoff", "cut-off", "interview schedule", "exam date",
+    "exam city", "city slip", "score card", "scorecard", "counselling",
+    "counseling", "time table", "timetable", "date sheet", "datesheet",
+    "syllabus", "previous year", "exam analysis", "shortlisted candidates",
+    "provisional", "revised schedule", "exam pattern", "selection list",
+    "document verification", "physical test schedule", "tentative",
+]
+
+
+def is_junk(title):
+    """Return True if title is a result/answer-key/admit-card type (not an opportunity)."""
+    t = title.lower()
+    return any(kw in t for kw in JUNK_KEYWORDS)
 
 
 def fetch_url(url, headers=None):
@@ -388,7 +410,12 @@ def fetch_hackerearth():
 
     content = fetch_url(
         "https://www.hackerearth.com/chrome-extension/events/",
-        headers={"Accept": "application/json"}
+        headers={
+            "Accept": "application/json",
+            "Referer": "https://www.hackerearth.com/challenges/",
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-Requested-With": "XMLHttpRequest",
+        }
     )
     if not content:
         return opportunities
@@ -476,14 +503,44 @@ def fetch_devpost_hackathons():
 # LLM CLASSIFICATION (Groq - free tier, llama-3.1-8b-instant)
 # ============================================================
 
-def classify_with_llm(opportunities):
-    """Use Groq LLM to filter relevant opportunities based on user profile."""
-    if not GROQ_API_KEY:
-        print("[WARN] No GROQ_API_KEY set. Skipping LLM classification, sending all.")
-        return opportunities
+# Keywords indicating tech/CS/research relevance (used as fallback when LLM is down)
+RELEVANT_KEYWORDS = [
+    "software", "developer", "comput", "cse", "data scien", "data analy",
+    "machine learning", "deep learning", " ai ", "a.i", "artificial intelligence",
+    " ml ", "ml ", "nlp", "computer vision", "llm", "python", "java", "c++",
+    "web", "app dev", "android", "ios", "full stack", "backend", "frontend",
+    "programmer", "programming", "coding", "cyber", "security", "cloud",
+    "engineer", "engineering", "b.tech", "b.e", "btech", "iot", "robotics",
+    "research", "jrf", "intern", "technolog", "tech ", "information technology",
+    "embedded", "vlsi", "electronics", "blockchain", "devops", "analytics",
+]
 
+
+def keyword_relevance(opp):
+    """Lightweight relevance check used when the LLM is unavailable.
+
+    - Scholarships / fellowships / hackathons / competitions: always kept (broadly useful)
+    - Internships / jobs: kept only if tech/CS/engineering keywords match
+    """
+    cat = opp["category"]
+    if cat in ("SCHOLARSHIP", "FELLOWSHIP", "HACKATHON", "COMPETITION"):
+        return True
+    text = (opp["title"] + " " + opp.get("description", "")).lower()
+    return any(kw in text for kw in RELEVANT_KEYWORDS)
+
+
+def classify_with_llm(opportunities):
+    """Use Groq LLM to filter relevant opportunities based on user profile.
+
+    Falls back to keyword_relevance() when the LLM is unavailable or errors out,
+    so the bot never floods Telegram with everything.
+    """
     if not opportunities:
         return []
+
+    if not GROQ_API_KEY:
+        print("[WARN] No GROQ_API_KEY set. Using keyword fallback filter.")
+        return [o for o in opportunities if keyword_relevance(o)]
 
     print(f"[INFO] Classifying {len(opportunities)} opportunities with Groq LLM...")
 
@@ -526,7 +583,7 @@ RELEVANT NUMBERS:"""
 
         url = "https://api.groq.com/openai/v1/chat/completions"
         payload = json.dumps({
-            "model": "llama-3.1-8b-instant",
+            "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1,
             "max_tokens": 100
@@ -552,10 +609,22 @@ RELEVANT NUMBERS:"""
                     if 0 <= idx < len(batch):
                         relevant.append(batch[idx])
 
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode()[:300]
+            except Exception:
+                pass
+            print(f"[ERROR] Groq HTTP {e.code}: {body}")
+            if e.code in (401, 403):
+                print("[HINT] Check your GROQ_API_KEY secret is valid & active. "
+                      f"If the model '{GROQ_MODEL}' is deprecated, set a GROQ_MODEL secret "
+                      "to a current model from https://console.groq.com/docs/models")
+            # Fall back to keyword filter for this batch (don't flood)
+            relevant.extend([o for o in batch if keyword_relevance(o)])
         except Exception as e:
             print(f"[ERROR] Groq API error: {e}")
-            # On failure, include all from this batch (better to over-notify than miss)
-            relevant.extend(batch)
+            relevant.extend([o for o in batch if keyword_relevance(o)])
 
         time.sleep(2)  # Rate limiting between batches (free tier is strict)
 
@@ -640,6 +709,12 @@ def main():
     print(f"\n{'='*60}")
     print(f"[INFO] TOTAL FETCHED: {len(all_opportunities)}")
     print(f"{'='*60}")
+
+    # ---- Filter out junk (exam results, answer keys, admit cards, etc.) ----
+    before = len(all_opportunities)
+    all_opportunities = [o for o in all_opportunities if not is_junk(o["title"])]
+    print(f"[INFO] Removed {before - len(all_opportunities)} junk listings "
+          f"(results/answer-keys/admit-cards). Kept {len(all_opportunities)}")
 
     # ---- Deduplicate against seen ----
     new_opportunities = []

@@ -35,7 +35,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "actions@github.com"
-          git pull --rebase origin main || true
           git add data/seen.json
           git diff --cached --quiet || git commit -m "bot: update seen opportunities $(date +'%Y-%m-%d')"
+          git pull --rebase origin main || true
           git push
