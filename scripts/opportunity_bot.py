@@ -568,6 +568,56 @@ def fetch_github_internships():
     return opportunities
 
 
+def fetch_speedyapply_intl():
+    """Parse speedyapply's international internships markdown table.
+
+    speedyapply/2026-SWE-College-Jobs publishes INTERN_INTL.md (a Markdown table)
+    with non-US internships, including many in India. We parse the table and keep
+    only recently-posted roles (age in hours, or <= 5 days).
+    """
+    print("[INFO] Fetching international internships from speedyapply...")
+    opportunities = []
+
+    md = fetch_url("https://raw.githubusercontent.com/speedyapply/2026-SWE-College-Jobs/main/INTERN_INTL.md")
+    if not md:
+        return opportunities
+
+    def strip_tags(s):
+        return re.sub(r'<[^>]+>', '', s).replace('&amp;', '&').strip()
+
+    recent_ages = {"0d", "1d", "2d", "3d", "4d", "5d"}
+    rows = [l for l in md.splitlines() if l.startswith("|")]
+    # skip header row + separator row
+    for row in rows[2:]:
+        cols = [c.strip() for c in row.split("|")[1:-1]]
+        if len(cols) < 5:
+            continue
+        company = strip_tags(cols[0])
+        position = strip_tags(cols[1])
+        location = strip_tags(cols[2])
+        m = re.search(r'href="([^"]+)"', cols[3])
+        link = m.group(1) if m else ""
+        age = strip_tags(cols[4])
+
+        # Keep only recent (hours, or within 5 days)
+        if not (("h" in age) or (age in recent_ages)):
+            continue
+        if not (company and position and link):
+            continue
+
+        opportunities.append({
+            "source": "GitHub/speedyapply",
+            "category": "INTERNSHIP",
+            "title": f"{position} @ {company}",
+            "link": link,
+            "description": location,
+            "date": age + " ago" if age else ""
+        })
+
+    print(f"[INFO] Found {len(opportunities)} recent intl internships from speedyapply")
+    return opportunities
+
+
 # ============================================================
 # LLM CLASSIFICATION (Groq - free tier, llama-3.1-8b-instant)
 # ============================================================
@@ -831,6 +881,7 @@ def main():
 
     # Community GitHub repos (structured JSON internship listings)
     all_opportunities.extend(fetch_github_internships())
+    all_opportunities.extend(fetch_speedyapply_intl())
 
     print(f"\n{'='*60}")
     print(f"[INFO] TOTAL FETCHED: {len(all_opportunities)}")
