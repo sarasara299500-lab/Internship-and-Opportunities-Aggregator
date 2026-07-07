@@ -13,14 +13,29 @@ import os
 # ============================================================
 # Override with the USER_PROFILE env var to reuse the bot for someone else.
 USER_PROFILE = os.environ.get("USER_PROFILE", """
-- 3rd year B.Tech CSE student (entering 5th semester)
-- College: LNCT Bhopal, Madhya Pradesh
-- Interests: AI/ML, Software Development, Data Structures & Algorithms, Web Development
-- Skills: Python, C++, Java, SQL, HTML, CSS, JavaScript
-- Looking for: Software Engineering internships, AI/ML internships, hackathons,
-  scholarships, fellowships, research opportunities, coding competitions
-- NOT interested in: MBA, law, medical, agriculture, arts/humanities-only roles,
-  sales/marketing/HR internships, content writing roles
+- B.Tech Computer Science student in India, GRADUATING IN 2028
+  (currently entering 5th semester / 3rd year).
+- Nationality: Indian. Based in Bhopal, Madhya Pradesh, India. College: LNCT Bhopal.
+- Interests: AI/ML, Software Development, Data Structures & Algorithms, Web Development.
+- Skills: Python, C++, Java, SQL, HTML, CSS, JavaScript.
+- Looking for: Software Engineering / AI-ML / Data internships (Summer 2027 or
+  off-cycle / remote), hackathons, coding competitions, tech scholarships,
+  and research / technology fellowships.
+
+- ELIGIBILITY RULES (very important — used to reject irrelevant listings):
+  * KEEP only opportunities that are open to Indian students / international
+    applicants, OR located in India, OR fully remote / online / virtual /
+    global / "open to all".
+  * REJECT opportunities restricted to another country's citizens or residents,
+    or that are onsite in a foreign country (e.g. US-only, UK-only, Canada-only,
+    Nigeria-only, EU-only onsite roles). Being Indian, I cannot take these.
+  * REJECT full-time "new grad" / entry-level roles that need graduation in
+    2025 / 2026 / 2027 or an already-completed degree — I graduate in 2028.
+  * REJECT roles requiring a Master's / PhD or years of work experience.
+
+- NOT interested in: MBA / management, sales / marketing / HR, business /
+  case-study / strategy competitions, journalism, content writing,
+  finance / consulting, medical, law, agriculture, arts / humanities-only.
 """).strip()
 
 # ============================================================
@@ -41,8 +56,10 @@ LLM_BATCH_SIZE = int(os.environ.get("LLM_BATCH_SIZE", "15"))
 # CATEGORIES
 # ============================================================
 # Categories that are always relevant to the user — these skip the LLM entirely
-# to conserve the free-tier quota.
-AUTO_APPROVE_CATEGORIES = {"HACKATHON", "COMPETITION", "SCHOLARSHIP", "FELLOWSHIP"}
+# to conserve the free-tier quota. ONLY coding hackathons are blanket-approved;
+# competitions / scholarships / fellowships are relevance-checked because many
+# are non-tech (management case comps, climate/journalism fellowships, etc.).
+AUTO_APPROVE_CATEGORIES = {"HACKATHON"}
 
 # ============================================================
 # DEDUP / SEEN STORE

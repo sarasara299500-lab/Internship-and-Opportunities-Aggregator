@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from core.utils import (  # noqa: E402
     is_junk, is_blocked, normalize_key, make_hash, keyword_relevance,
-    load_seen, save_seen,
+    is_geo_ineligible, load_seen, save_seen,
 )
 from core import config, utils  # noqa: E402
 from scrapers.scholarships import detect_category  # noqa: E402
@@ -91,6 +91,42 @@ class TestDetectCategory(unittest.TestCase):
 
     def test_uses_rss_category_tags(self):
         self.assertEqual(detect_category("Great news", ["Hackathon"]), "HACKATHON")
+
+
+class TestGeoIneligible(unittest.TestCase):
+    """Uses the real listings from the user's digest to lock behaviour."""
+
+    def _opp(self, title, desc=""):
+        return {"title": title, "description": desc, "category": "INTERNSHIP"}
+
+    def test_keeps_india_and_open(self):
+        keep = [
+            self._opp("Kaya AI India Hackathon 2026"),
+            self._opp("MERN Stack Internship", "Type: internships | Region: online"),
+            self._opp("Machine Learning - Internship (WFH)", "ML"),
+            self._opp("Build With Gemma Bengaluru Ai Sprint", "Devfolio Hackathon"),
+            self._opp("Software Intern", "Remote"),
+            self._opp("Global AI Fellowship", "open to all, worldwide"),
+            self._opp("AWS/Azure Cloud Operations - Internship", "CS"),  # no geo signal
+        ]
+        for o in keep:
+            self.assertFalse(is_geo_ineligible(o), f"should KEEP: {o['title']}")
+
+    def test_drops_foreign_onsite(self):
+        drop = [
+            self._opp("Machine Learning Intern @ Blue River", "AI/ML/Data | Santa Clara, CA"),
+            self._opp("Machine Learning Researcher @ Jane Street", "AI/ML/Data | NYC"),
+            self._opp("Research Scientist Intern @ Meta", "AI/ML/Data | Redmond, WA"),
+            self._opp("Android Engineer 1 @ Spotify", "New Grad | London, UK"),
+            self._opp("Associate Deep Learning Engineer @ DreamWorks", "New Grad | Toronto, ON, Canada"),
+            self._opp("AI Infrastructure Engineer @ Cerebras", "New Grad | Canada, United States"),
+            self._opp("AI & Analytics Engineer @ PM Pediatric", "New Grad | Remote in USA"),
+        ]
+        for o in drop:
+            self.assertTrue(is_geo_ineligible(o), f"should DROP: {o['title']}")
+
+    def test_no_location_is_kept(self):
+        self.assertFalse(is_geo_ineligible(self._opp("Data Science - Internship (Part Time)", "ML")))
 
 
 class TestSeenStore(unittest.TestCase):

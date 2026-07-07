@@ -97,6 +97,13 @@ BLOCKLIST_KEYWORDS = [
     "supply chain", "civil engineering", "mechanical engineer",
     "mbbs", "nursing", "pharmacy", "physiotherapy", "ayurved",
     "chartered accountant", "company secretary", "law clerk",
+    # Non-tech competition / event noise (management, business, arts, media).
+    "case competition", "case study competition", "business case",
+    "general management", "management track", "strategy case",
+    "b-plan", "business plan", "journalism", "wribate", "debate competition",
+    "griha decor", "home decor", "memepreneur", "pitch battle",
+    "quiz competition", "essay competition", "poster making", "photography contest",
+    "short film", "dance", "singing",
 ]
 # Short/risky tokens: matched only as whole words (avoids e.g. "Sales" hitting
 # "Salesforce", or "ops" hitting "DevOps").
@@ -113,6 +120,111 @@ def is_blocked(title):
         return True
     return False
 
+
+# ============================================================
+# GEO / ELIGIBILITY FILTER
+# ============================================================
+# The user is an Indian student. Keep opportunities that are in India, remote/
+# online/global, or explicitly open to all. Drop roles that are onsite in — or
+# restricted to — another country (the biggest source of digest noise, e.g. the
+# US/UK/Canada listings from the community GitHub internship repos).
+
+# Positive signals: India locations OR globally-open / remote.
+GEO_OK_KEYWORDS = [
+    "india", "indian", "bengaluru", "bangalore", "mumbai", "delhi", "new delhi",
+    "hyderabad", "pune", "chennai", "kolkata", "noida", "gurgaon", "gurugram",
+    "ahmedabad", "jaipur", "indore", "bhopal", "lucknow", "chandigarh", "kochi",
+    "coimbatore", "nagpur", "remote", "online", "work from home", "wfh",
+    "virtual", "global", "worldwide", "anywhere", "open to all", "international",
+]
+
+# "Remote but locked to a foreign country" — still ineligible for the user.
+FOREIGN_REMOTE_PATTERNS = [
+    "remote in usa", "remote in the us", "remote in united states", "remote, us",
+    "remote (us", "us remote", "remote in canada", "remote in uk",
+    "remote in the uk", "remote in europe", "remote in germany", "remote in australia",
+]
+
+# Foreign country / famous foreign-city signals (matched inside spaced text).
+GEO_FOREIGN_KEYWORDS = [
+    " usa ", "united states", " u.s.", " uk ", "united kingdom", "canada",
+    "canadian", "nigeria", "kenya", "ghana", "south africa", "singapore",
+    "germany", " france ", "australia", "netherlands", "ireland", " japan ",
+    " china ", " uae ", "dubai", "abu dhabi", " europe ", "spain", "italy",
+    "poland", "brazil", "mexico", "israel", "switzerland", "sweden", "denmark",
+    "norway", "finland", "portugal", "austria", "belgium", "new zealand",
+    "malaysia", "indonesia", "philippines", "vietnam", "thailand", "qatar",
+    "saudi",
+    # Well-known foreign cities that appear in the GitHub/Simplify feeds.
+    "new york", " nyc ", " sf ", "san francisco", " seattle", " boston",
+    " austin", " atlanta", " chicago", "mountain view", "palo alto", "san jose",
+    "sunnyvale", "redmond", "pasadena", "philadelphia", " miami", "manchester",
+    " london", "toronto", "vancouver", "calgary", "ottawa", "montreal", "dublin",
+    "berlin", "munich", " paris", "amsterdam", "zurich", "tel aviv", " dallas",
+    " houston", " denver", " phoenix", "milpitas", "greenwich", "mclean",
+    " reston", "arlington", "charlotte", " raleigh", " durham", "san diego",
+    "los angeles", "fort worth", "fort bragg", "state college", "king of prussia",
+]
+
+# US state postal codes (uppercase, matched against the ORIGINAL-case text as
+# ", CA" / ", NY" — very precise, few false positives).
+_US_STATES = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL",
+    "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT",
+    "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI",
+    "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC",
+}
+_US_STATE_RE = re.compile(r',\s*([A-Z]{2})\b')
+
+
+def _has_us_state(raw_text):
+    """True if raw_text contains a ', XX' US state postal code (case-sensitive)."""
+    return any(m.group(1) in _US_STATES for m in _US_STATE_RE.finditer(raw_text))
+
+
+def is_geo_ineligible(opp):
+    """Return True if the opportunity is onsite in / restricted to a foreign
+    country and is NOT open to an Indian student.
+
+    Logic:
+      1. If it names India or is clearly remote/online/global/open-to-all → KEEP
+         (unless it's "remote in <foreign country>", which is still restricted).
+      2. Otherwise, if it names a foreign country/city or a US state code → DROP.
+      3. If there is no location signal at all → KEEP (let the LLM decide).
+    """
+    raw = (opp.get("title", "") + "  " + str(opp.get("description", ""))).strip()
+    if not raw:
+        return False
+    low = " " + raw.lower() + " "
+
+    if any(k in low for k in GEO_OK_KEYWORDS):
+        # India / global / remote — but reject foreign-locked "remote in USA" etc.
+        if any(p in low for p in FOREIGN_REMOTE_PATTERNS):
+            return True
+        return False
+
+    if any(k in low for k in GEO_FOREIGN_KEYWORDS):
+        return True
+    if _has_us_state(raw):
+        return True
+    return False
+
+# Realistic browser headers. Many sites (Cloudflare-fronted: SarkariResult,
+# OpportunityDesk, HackerEarth, foundit.in) return 403 to a bare/short urllib
+# User-Agent, so we present a full, current Chrome fingerprint by default.
+DEFAULT_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "application/json;q=0.8,*/*;q=0.7"),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Upgrade-Insecure-Requests": "1",
+}
+
+
 def fetch_url(url, headers=None, retries=2, source_name=None):
     """Fetch URL content with retry logic, error tracking, and permissive SSL (for govt sites)."""
     import ssl
@@ -120,12 +232,11 @@ def fetch_url(url, headers=None, retries=2, source_name=None):
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
+    # Per-call headers override the browser defaults (e.g. Accept: application/json).
+    merged_headers = {**DEFAULT_HEADERS, **(headers or {})}
+
     for attempt in range(1, retries + 1):
-        req = urllib.request.Request(url)
-        req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
-        if headers:
-            for k, v in headers.items():
-                req.add_header(k, v)
+        req = urllib.request.Request(url, headers=merged_headers)
         try:
             with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
                 return resp.read().decode("utf-8", errors="ignore")

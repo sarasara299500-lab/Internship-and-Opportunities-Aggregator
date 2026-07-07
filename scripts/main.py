@@ -18,7 +18,7 @@ from core.config import (
 )
 from core.utils import (
     load_seen, save_seen, make_hash, normalize_key, is_junk, is_blocked,
-    keyword_relevance, _source_errors,
+    is_geo_ineligible, keyword_relevance, _source_errors,
 )
 from core.telegram import send_digest, send_monthly_reminders
 from scrapers import govt, hackathons, internships, scholarships, fellowships
@@ -157,10 +157,10 @@ OPPORTUNITIES:
 {listings_text}
 
 SCORING GUIDE:
-- 9-10: Perfect fit (AI/ML, software, data science, CS research, tech fellowship/scholarship matching their skills)
-- 6-8: Good fit (general software/engineering/tech role, coding hackathon, eligible engineering scholarship)
+- 9-10: Perfect fit (AI/ML, software, data science, CS research, tech fellowship/scholarship matching their skills) AND open to an Indian student / India-based / remote / global.
+- 6-8: Good fit (general software/engineering/tech role, coding hackathon, eligible engineering scholarship) that an Indian 2028 graduate can actually apply to.
 - 3-5: Weak/uncertain fit (tangentially technical, or eligibility unclear)
-- 0-2: Not relevant (sales, marketing, HR, content/video, non-tech, MBA/medical/law, needs PhD/PG, ineligible)
+- 0-2: Not relevant. Score here if ANY apply: non-tech (sales/marketing/HR/content/management/case-study/journalism/MBA/medical/law); restricted to another country's citizens/residents or ONSITE in a foreign country (US/UK/Canada/Nigeria/EU etc.) and not remote/open-to-Indians; full-time new-grad/entry-level needing graduation in 2025/2026/2027 or a completed degree (student graduates in 2028); needs Master's/PhD or years of experience.
 
 Respond with ONLY a JSON object mapping each opportunity number to its score:
 {{"scores": {{"1": 9, "2": 2, "3": 7}}}}
@@ -272,6 +272,13 @@ def main():
     all_opportunities = [o for o in all_opportunities if not is_blocked(o["title"])]
     print(f"[INFO] Removed {before - len(all_opportunities)} blocklisted listings "
           f"(marketing/sales/HR/content/etc.). Kept {len(all_opportunities)}")
+
+    # ---- Geo/eligibility filter (drop roles onsite in / locked to a foreign
+    #      country; keep India + remote/online/global/open-to-all) ----
+    before = len(all_opportunities)
+    all_opportunities = [o for o in all_opportunities if not is_geo_ineligible(o)]
+    print(f"[INFO] Removed {before - len(all_opportunities)} geo-ineligible listings "
+          f"(foreign-only / non-India onsite). Kept {len(all_opportunities)}")
 
     # ---- Cross-source dedup (same role appearing on multiple sources) ----
     before = len(all_opportunities)
