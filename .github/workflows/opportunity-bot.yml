@@ -24,6 +24,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Run unit tests
+        run: python -m unittest discover -s scripts/tests
+
       - name: Run Opportunity Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

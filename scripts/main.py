@@ -5,42 +5,100 @@ Fetches opportunities from 25+ sources, classifies relevance using
 Groq LLM, and sends matches to Telegram.
 """
 
-import os
 import json
 import time
 import re
 import urllib.request
-import urllib.parse
+import urllib.error
 from datetime import datetime
 
+from core.config import (
+    USER_PROFILE, GROQ_API_KEY, GROQ_MODEL, MIN_RELEVANCE_SCORE,
+    LLM_BATCH_SIZE, AUTO_APPROVE_CATEGORIES,
+)
 from core.utils import (
     load_seen, save_seen, make_hash, normalize_key, is_junk, is_blocked,
-    keyword_relevance, AUTO_APPROVE_CATEGORIES
+    keyword_relevance, _source_errors,
 )
 from core.telegram import send_digest, send_monthly_reminders
 from scrapers import govt, hackathons, internships, scholarships, fellowships
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 
-# Groq model - update here if the model gets deprecated (see https://console.groq.com/docs/models)
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+# ============================================================
+# SOURCE REGISTRY
+# ============================================================
+# Each entry is (label, fetch_callable). To add a source, add one line here —
+# no need to touch main(). Every source is fetched in isolation: if one crashes
+# or times out, the others still run and the failure is reported in the digest.
+def _build_sources():
+    return [
+        # ---- Government jobs ----
+        ("FreeJobAlert", govt.fetch_govt_jobs),
+        ("JagranJosh", govt.fetch_jagranjosh),
+        ("SarkariResult", govt.fetch_sarkari_result),
+        ("MyGov", govt.fetch_mygov),
 
-# Minimum LLM relevance score (0-10) for an opportunity to be sent. Higher = stricter.
-MIN_RELEVANCE_SCORE = int(os.environ.get("MIN_RELEVANCE_SCORE", "6"))
+        # ---- Unstop (scholarships, internships, hackathons, competitions) ----
+        ("Unstop-Scholarships", scholarships.fetch_unstop_scholarships),
+        ("Unstop-Internships", scholarships.fetch_unstop_internships),
+        ("Unstop-Hackathons", scholarships.fetch_unstop_hackathons),
+        ("Unstop-Competitions", scholarships.fetch_unstop_competitions),
 
-SEEN_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "seen.json")
+        # ---- Scholarships ----
+        ("ScholarshipsInIndia", scholarships.fetch_scholarshipsinindia),
 
-# Your profile - LLM uses this to judge relevance
-USER_PROFILE = """
-- 3rd year B.Tech CSE student (entering 5th semester)
-- College: LNCT Bhopal, Madhya Pradesh
-- Interests: AI/ML, Software Development, Data Structures & Algorithms, Web Development
-- Skills: Python, C++, Java, SQL, HTML, CSS, JavaScript
-- Looking for: Software Engineering internships, AI/ML internships, hackathons,
-  scholarships, fellowships, research opportunities, coding competitions
-- NOT interested in: MBA, law, medical, agriculture, arts/humanities-only roles,
-  sales/marketing/HR internships, content writing roles
-"""
+        # ---- Global aggregators (generic RSS) ----
+        ("OpportunitiesForYouth", lambda: scholarships.fetch_generic_rss(
+            "https://opportunitiesforyouth.org/feed/", "OpportunitiesForYouth")),
+        ("OpportunitiesCircle", lambda: scholarships.fetch_generic_rss(
+            "https://opportunitiescircle.com/feed/", "OpportunitiesCircle")),
+        ("OpportunityDesk", lambda: scholarships.fetch_generic_rss(
+            "https://opportunitydesk.org/feed/", "OpportunityDesk")),
+        ("ScholarshipRoar", lambda: scholarships.fetch_generic_rss(
+            "https://scholarshiproar.com/feed/", "ScholarshipRoar")),
+        ("OpportunityCell", lambda: scholarships.fetch_generic_rss(
+            "https://opportunitycell.com/feed/", "OpportunityCell")),
+        ("Oyaop", lambda: scholarships.fetch_generic_rss(
+            "https://oyaop.com/feed/", "Oyaop")),
+
+        # ---- Hackathons & competitions ----
+        ("HackerEarth", hackathons.fetch_hackerearth),
+        ("Devpost", hackathons.fetch_devpost_hackathons),
+        ("Codeforces", hackathons.fetch_codeforces),
+        ("Devfolio", hackathons.fetch_devfolio),
+
+        # ---- Internships ----
+        ("GitHub-Simplify", internships.fetch_github_internships),
+        ("GitHub-speedyapply", internships.fetch_speedyapply_intl),
+        ("GitHub-NewGrad", internships.fetch_github_newgrad),
+        ("foundit.in", internships.fetch_foundit),
+        ("Internshala", internships.fetch_internshala),
+        ("AICTE", internships.fetch_aicte_internships),
+
+        # ---- Fellowships ----
+        ("GovAI", fellowships.fetch_governance_ai),
+        ("ISTI", fellowships.fetch_isti_portal),
+    ]
+
+
+def fetch_all_sources():
+    """Run every registered source in isolation and return the merged list.
+
+    A crash in one source is caught, logged, recorded for the Telegram error
+    summary, and does not abort the run. Per-source counts are printed so a
+    source that silently rots (drops to 0) is visible in the logs.
+    """
+    all_opportunities = []
+    for label, fetch_fn in _build_sources():
+        try:
+            items = fetch_fn() or []
+            all_opportunities.extend(items)
+            flag = "  <-- 0 items (check source)" if not items else ""
+            print(f"[COUNT] {label}: {len(items)}{flag}")
+        except Exception as e:
+            print(f"[ERROR] Source '{label}' crashed: {e}")
+            _source_errors.append(label)
+    return all_opportunities
 
 def classify_with_llm(opportunities):
     """Score each opportunity 0-10 for relevance to the user, keep those scoring
@@ -78,7 +136,7 @@ def classify_with_llm(opportunities):
 
 
     relevant = []
-    batch_size = 15
+    batch_size = LLM_BATCH_SIZE
 
     for i in range(0, len(needs_llm), batch_size):
         batch = needs_llm[i:i + batch_size]
@@ -192,73 +250,8 @@ def main():
     seen = load_seen()
     print(f"[INFO] Previously seen: {len(seen)} opportunities")
 
-    # ---- Fetch from all sources ----
-    all_opportunities = []
-
-    # Government Jobs
-    all_opportunities.extend(govt.fetch_govt_jobs())
-    all_opportunities.extend(govt.fetch_jagranjosh())
-
-    # Unstop (India's biggest platform - scholarships, internships, hackathons, competitions)
-    all_opportunities.extend(scholarships.fetch_unstop_scholarships())
-    all_opportunities.extend(scholarships.fetch_unstop_internships())
-    all_opportunities.extend(scholarships.fetch_unstop_hackathons())
-    all_opportunities.extend(scholarships.fetch_unstop_competitions())
-
-    # ScholarshipsInIndia (extra scholarship coverage)
-    all_opportunities.extend(scholarships.fetch_scholarshipsinindia())
-
-    # Global opportunity aggregators (fellowships, scholarships, internships worldwide)
-    all_opportunities.extend(scholarships.fetch_generic_rss(
-        "https://opportunitiesforyouth.org/feed/", "OpportunitiesForYouth"))
-    all_opportunities.extend(scholarships.fetch_generic_rss(
-        "https://opportunitiescircle.com/feed/", "OpportunitiesCircle"))
-    all_opportunities.extend(scholarships.fetch_generic_rss(
-        "https://opportunitydesk.org/feed/", "OpportunityDesk"))
-    all_opportunities.extend(scholarships.fetch_generic_rss(
-        "https://scholarshiproar.com/feed/", "ScholarshipRoar"))
-    all_opportunities.extend(scholarships.fetch_generic_rss(
-        "https://opportunitycell.com/feed/", "OpportunityCell"))
-    all_opportunities.extend(scholarships.fetch_generic_rss(
-        "https://oyaop.com/feed/", "Oyaop"))
-
-    # HackerEarth (hackathons + hiring challenges)
-    all_opportunities.extend(hackathons.fetch_hackerearth())
-
-    # Devpost (International hackathons)
-    all_opportunities.extend(hackathons.fetch_devpost_hackathons())
-
-    # Codeforces (upcoming coding contests)
-    all_opportunities.extend(hackathons.fetch_codeforces())
-
-    # Community GitHub repos (structured JSON internship listings)
-    all_opportunities.extend(internships.fetch_github_internships())
-    all_opportunities.extend(internships.fetch_speedyapply_intl())
-    all_opportunities.extend(internships.fetch_github_newgrad())
-
-    # foundit.in (job board API - tech internships)
-    all_opportunities.extend(internships.fetch_foundit())
-
-    # Internshala (India's biggest internship platform)
-    all_opportunities.extend(internships.fetch_internshala())
-
-    # GovAI (governance.ai) - high-value AI governance fellowships
-    all_opportunities.extend(fellowships.fetch_governance_ai())
-
-    # Sarkari Result (latest govt jobs)
-    all_opportunities.extend(govt.fetch_sarkari_result())
-
-    # Devfolio (Web3 / Community hackathons)
-    all_opportunities.extend(hackathons.fetch_devfolio())
-
-    # AICTE Internships
-    all_opportunities.extend(internships.fetch_aicte_internships())
-
-    # ISTI Portal (Fellowships)
-    all_opportunities.extend(fellowships.fetch_isti_portal())
-
-    # MyGov (Govt Campaigns/Competitions)
-    all_opportunities.extend(govt.fetch_mygov())
+    # ---- Fetch from all sources (isolated; one failure won't stop the rest) ----
+    all_opportunities = fetch_all_sources()
 
     # Trigger static reminders on the 1st of the month
     send_monthly_reminders()
@@ -327,9 +320,6 @@ def main():
     print(f"\n[DONE] Sent digest with {len(relevant)} opportunities to Telegram.")
     print(f"[DONE] Total tracked: {len(seen)} opportunities")
 
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()

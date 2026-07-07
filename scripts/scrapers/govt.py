@@ -111,7 +111,7 @@ def fetch_sarkari_result():
 
         opportunities.append({
             "source": "SarkariResult",
-            "category": "GOVT_JOB",
+            "category": "GOV JOB",
             "title": title,
             "link": link,
             "description": "Sarkari Result Latest Job",

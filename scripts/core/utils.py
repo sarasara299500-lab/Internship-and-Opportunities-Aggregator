@@ -5,25 +5,13 @@ import re
 import urllib.request
 import time
 
-SEEN_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "seen.json")
-
-# Your profile - LLM uses this to judge relevance
-USER_PROFILE = """
-- 3rd year B.Tech CSE student (entering 5th semester)
-- College: LNCT Bhopal, Madhya Pradesh
-- Interests: AI/ML, Software Development, Data Structures & Algorithms, Web Development
-- Skills: Python, C++, Java, SQL, HTML, CSS, JavaScript
-- Looking for: Software Engineering internships, AI/ML internships, hackathons,
-  scholarships, fellowships, research opportunities, coding competitions
-- NOT interested in: MBA, law, medical, agriculture, arts/humanities-only roles,
-  sales/marketing/HR internships, content writing roles
-"""
+from core.config import (
+    SEEN_FILE, SEEN_MAX_AGE, AUTO_APPROVE_CATEGORIES,
+)
 
 # ============================================================
 # UTILITIES
 # ============================================================
-
-SEEN_MAX_AGE = 30 * 86400  # Prune seen entries older than 30 days
 
 # Global error tracker — collects source failures for the Telegram error summary
 _source_errors = []
@@ -161,8 +149,7 @@ RELEVANT_KEYWORDS = [
     "embedded", "vlsi", "electronics", "blockchain", "devops", "analytics",
 ]
 
-# Categories that are always relevant — skip LLM to save quota
-AUTO_APPROVE_CATEGORIES = {"HACKATHON", "COMPETITION", "SCHOLARSHIP", "FELLOWSHIP"}
+# AUTO_APPROVE_CATEGORIES is imported from core.config (single source of truth).
 
 def keyword_relevance(opp):
     """Lightweight relevance check used when the LLM is unavailable."""

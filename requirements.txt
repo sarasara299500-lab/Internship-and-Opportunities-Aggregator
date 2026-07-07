@@ -1,0 +1,11 @@
+# Opportunity Bot — dependencies
+#
+# RUNTIME: none. The bot deliberately uses only the Python standard library
+# (urllib, json, re, xml.etree, hashlib, ssl) so it runs on a clean GitHub
+# Actions runner with zero install step. Requires Python 3.9+.
+#
+# DEV / LINT tooling (optional — install with `pip install -r requirements.txt`):
+flake8==7.1.1
+autoflake==2.3.1
+pycodestyle==2.12.1
+pyflakes==3.2.0
